@@ -68,9 +68,9 @@ class ModelManager:
         self.nets.load_state_dict(state_dict)
         self.nets.to(device=config.DEVICE)
         
-        with config.inference_mode_context(config.InferenceMode.ACCELERATED):
-            self.noise_pred_net_graph, self.static_noisy_action, self.static_k, self.static_obs_cond, \
-            self.static_diffusion_noise, self.static_model_output = load_noise_pred_net_graph(self.noise_pred_net)
+        # with config.inference_mode_context(config.InferenceMode.ACCELERATED):
+        self.noise_pred_net_graph, self.static_noisy_action, self.static_k, self.static_obs_cond, \
+        self.static_diffusion_noise, self.static_model_output = load_noise_pred_net_graph(self.noise_pred_net)
 
     def predict_action(self, obs_deque):
         """
@@ -101,29 +101,36 @@ class ModelManager:
             obs_cond = obs_features.unsqueeze(0).flatten(start_dim=1).to(config.DEVICE).float()
             noisy_action = torch.randn((1, config.PRED_HORIZON, config.ACTION_DIM), device=config.DEVICE)
 
-            if config.INFERENCE_MODE == config.InferenceMode.NORMAL:
-                for k in self.noise_scheduler.timesteps:
-                    noise_pred = self.noise_pred_net(
-                        sample=noisy_action,
-                        timestep=k,
-                        global_cond=obs_cond
-                    )
-                    noisy_action = self.noise_scheduler.step(
-                        model_output=noise_pred,
-                        timestep=k,
-                        sample=noisy_action
-                    ).prev_sample
-            else:
-                self.static_model_output.copy_(noisy_action)
-                for k in self.noise_scheduler.timesteps:
-                    diffusion_noise = torch.randn((1, config.PRED_HORIZON, config.ACTION_DIM), device=config.DEVICE)
-                    self.static_k.copy_(k)
-                    self.static_noisy_action.copy_(self.static_model_output)
-                    self.static_obs_cond.copy_(obs_cond)
-                    self.static_diffusion_noise.copy_(diffusion_noise)
-                    self.noise_pred_net_graph.replay()  
+            # if config.INFERENCE_MODE == config.InferenceMode.NORMAL:
+            for k in self.noise_scheduler.timesteps:
+                noise_pred = self.noise_pred_net(
+                    sample=noisy_action,
+                    timestep=k,
+                    global_cond=obs_cond
+                )
+                noisy_action = self.noise_scheduler.step(
+                    model_output=noise_pred,
+                    timestep=k,
+                    sample=noisy_action
+                ).prev_sample
 
-                noisy_action = self.static_model_output    
+            self.static_model_output.copy_(noisy_action)
+            for k in self.noise_scheduler.timesteps:
+                diffusion_noise = torch.randn((1, config.PRED_HORIZON, config.ACTION_DIM), device=config.DEVICE)
+                self.static_k.copy_(k)
+                self.static_noisy_action.copy_(self.static_model_output)
+                self.static_obs_cond.copy_(obs_cond)
+                self.static_diffusion_noise.copy_(diffusion_noise)
+                self.noise_pred_net_graph.replay()  
+
+            _noisy_action = self.static_model_output    
+            assert noisy_action.shape == _noisy_action.shape
+            diff = torch.abs(noisy_action - _noisy_action)
+            max_diff = torch.max(diff).item()
+            min_diff = torch.min(diff).item()
+            mse_diff = torch.mean(diff ** 2).item()
+            print(f"Max difference: {max_diff}, Min difference: {min_diff}, MSE difference: {mse_diff}")
+            print(f"Max difference: {max_diff}, Min difference: {min_diff}")
 
             naction = noisy_action.detach().to('cpu').numpy()
             naction = naction[0]

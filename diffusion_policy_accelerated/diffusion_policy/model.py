@@ -15,8 +15,8 @@ from torch.profiler import profile, record_function, ProfilerActivity
 from tqdm.auto import tqdm
 
 import diffusion_policy_accelerated.config as config 
-import diffusion_policy_accelerated.conv1d_gnm as conv1d_gnm
-import diffusion_policy_accelerated.denoise as denoise
+# import diffusion_policy_accelerated.conv1d_gnm as conv1d_gnm
+# import diffusion_policy_accelerated.denoise as denoise
 
 class SinusoidalPosEmb(nn.Module):
     def __init__(self, dim):
@@ -70,10 +70,10 @@ class Conv1dBlock(nn.Module):
         )
 
     def forward(self, x):
-        if config.INFERENCE_MODE == config.InferenceMode.ACCELERATED:
-            return conv1d_gnm.conv1d_gnm(x, self.block[0].weight, self.block[0].bias, self.block[1].weight, self.block[1].bias, self.out_channels, self.padding, self.kernel_size, 2)
-        else:
-            return self.block(x)
+        # if config.INFERENCE_MODE == config.InferenceMode.ACCELERATED:
+        #     return conv1d_gnm.conv1d_gnm(x, self.block[0].weight, self.block[0].bias, self.block[1].weight, self.block[1].bias, self.out_channels, self.padding, self.kernel_size, 2)
+        # else:
+        return self.block(x)
     
 class ConditionalResidualBlock1D(nn.Module):
     def __init__(self,
@@ -225,15 +225,15 @@ class ConditionalUnet1D(nn.Module):
         # (B,C,T)
         # 1. time
         timesteps = timestep
-        if not torch.is_tensor(timesteps):
-            # TODO: this requires sync between CPU and GPU. So try to pass timesteps as tensors if you can
-            timesteps = torch.tensor([timesteps], device=sample.device)
-        elif torch.is_tensor(timesteps) and len(timesteps.shape) == 0:
-            timesteps = timesteps[None].to(sample.device)
+        # if not torch.is_tensor(timesteps):
+        #     # TODO: this requires sync between CPU and GPU. So try to pass timesteps as tensors if you can
+        #     timesteps = torch.tensor([timesteps], device=sample.device)
+        # elif torch.is_tensor(timesteps) and len(timesteps.shape) == 0:
+        #     timesteps = timesteps[None].to(sample.device)
         # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
         timesteps = timesteps.expand(sample.shape[0])
+        print("-------timesteps shape------", timesteps.shape)   
         global_feature = self.diffusion_step_encoder(timesteps)
-
         if global_cond is not None:
             global_feature = torch.cat([
                 global_feature, global_cond
@@ -258,8 +258,8 @@ class ConditionalUnet1D(nn.Module):
 
         x = self.final_conv(x)
 
-        if config.INFERENCE_MODE == config.InferenceMode.ACCELERATED:
-            x = denoise.denoise(x, sample, self.diffusion_constants, timestep, diffusion_noise)
+        # if config.INFERENCE_MODE == config.InferenceMode.ACCELERATED:
+        #     x = denoise.denoise(x, sample, self.diffusion_constants, timestep, diffusion_noise)
         
         # (B,C,T)
         x = x.moveaxis(-1,-2)
@@ -346,12 +346,15 @@ def load_noise_pred_net_graph(noise_pred_net):
     Returns:
     - tuple: A tuple containing the CUDA graph and static inputs for rapid inference replay.
     '''
-
+    T=2
     static_noisy_action = torch.randn((1, config.PRED_HORIZON, config.ACTION_DIM), requires_grad=False, device=config.DEVICE)
-    static_obs_cond = torch.randn((1, config.IMG_EMBEDDING_DIM), requires_grad=False, device=config.DEVICE)
+    static_obs_cond = torch.randn(1, T*(config.VISION_FEATURE_DIM + config.LOWDIM_OBS_DIM), requires_grad=False, device=config.DEVICE)
+    # import pdb; pdb.set_trace()
     static_k = torch.tensor(0, requires_grad=False, device=config.DEVICE)
     static_diffusion_noise = torch.randn((1, config.PRED_HORIZON, config.ACTION_DIM), device=config.DEVICE)
-    compiled_net = torch.compile(noise_pred_net)
+    # compiled_net = torch.compile(noise_pred_net)
+    compiled_net = noise_pred_net
+    noise_pred_net.eval()
 
     torch.cuda.synchronize()
     s = torch.cuda.Stream()
